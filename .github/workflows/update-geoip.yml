@@ -57,27 +57,35 @@ jobs:
           go mod tidy
           go run .
 
-      # Step 5: Commit and push the generated files.
+      # Step 5: Commit and push the generated files to the 'geoip' branch.
       - name: Commit and Push Changes
         run: |
-          # Configure git to use the built-in bot identity for this commit.
+          # Configure git to use the built-in bot identity.
           git config user.name 'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
           
-          # Create a new temporary branch to hold the results.
-          git checkout -b temp-geoip
+          # Create a new orphan branch with no history or files.
+          git checkout --orphan geoip-temp
           
-          # Add all generated files from the output folder.
-          git add -f geoip/*.txt
+          # Clean the working directory from any old files.
+          git rm -rf .
           
-          # Commit only if there are actual changes.
+          # Move the generated .txt files from the geoip subfolder to the root.
+          # The `|| true` prevents errors if the folder doesn't exist.
+          mv geoip/* . || true
+          
+          # Add all .txt files in the root to the staging area.
+          git add *.txt
+          
+          # Only commit if there are actual changes.
           if git diff --staged --quiet; then
             echo "No changes in generated files. Nothing to commit."
             exit 0
           fi
           
-          # Commit with a conventional message and [skip ci] to prevent loops.
+          # Commit with a conventional message and [skip ci] tag.
           git commit -m "🤖 chore(geoip): auto-update geoip data [skip ci]"
           
-          # Force push the results to the 'geoip' branch.
-          git push -f https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} temp-geoip:geoip
+          # Force push the temporary branch to the remote 'geoip' branch,
+          # completely replacing its content.
+          git push -f https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} geoip-temp:geoip
