@@ -26,7 +26,7 @@ const (
 	// CidrListURL is the source for Telegram's official IP ranges.
 	CidrListURL = "https://core.telegram.org/resources/cidr.txt"
 	// MaxCheckers is the number of concurrent check operations.
-	MaxCheckers = 300
+	MaxCheckers = 200
 	// CheckTimeout is the timeout for each TCP check.
 	CheckTimeout = 3 * time.Second
 	// CheckPort is the TCP port to check, 443 is standard for HTTPS.
@@ -47,6 +47,8 @@ func main() {
 	localMode := flag.Bool("local", false, "Enable local mode to use local DB file.")
 	// Defines an -icmp flag to switch to ICMP ping mode.
 	useICMP := flag.Bool("icmp", false, "Use ICMP ping instead of the default TCP check.")
+	// Defines a -limit flag to limit the number of IPs to check.
+	limit := flag.Int("limit", 0, "Limit the number of IPs to check (0 means no limit).")
 	flag.Parse()
 
 	// Mode-dependent setup
@@ -83,6 +85,12 @@ func main() {
 	log.Println("Step 2: Expanding CIDRs to all host IPs...")
 	allIPs := expandCIDRsToIPs(cidrs)
 	log.Printf("Expanded to %d total IPs to check.", len(allIPs))
+
+	// Apply the IP limit if the -limit flag is used.
+	if *limit > 0 && len(allIPs) > *limit {
+		log.Printf(">>> Limiting check to the first %d IPs as per -limit flag. <<<", *limit)
+		allIPs = allIPs[:*limit]
+	}
 
 	// Find reachable IPs
 	log.Println("Step 3: Finding reachable IPs...")
