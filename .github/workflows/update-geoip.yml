@@ -1,0 +1,83 @@
+# Workflow By wbx
+name: Update TGeoIP Data
+
+# Defines the triggers for this workflow.
+on:
+  # Trigger on pushes to the main branch.
+  push:
+    branches:
+      - main
+    # Only run if main.go or the workflow file itself changes.
+    paths:
+      - 'main.go'
+      - '.github/workflows/**'
+
+  # Also allow manual runs from the Actions tab.
+  workflow_dispatch:
+
+# Grant write permissions to the GITHUB_TOKEN for pushing commit results.
+permissions:
+  contents: write
+
+# Define the main job for this workflow.
+jobs:
+  update-geoip:
+    runs-on: ubuntu-latest
+    steps:
+      # Step 1: Check out the repository's code to the runner.
+      - name: Checkout main branch
+        uses: actions/checkout@v4
+
+      # Step 2: Download the MMDB database required by the application.
+      - name: Download IPinfo MMDB Database
+        run: |
+          DB_FILE="ipinfo_lite.mmdb"
+          # The URL uses the IPINFO_TOKEN secret for authentication.
+          DOWNLOAD_URL="https://ipinfo.io/data/free/country.mmdb?token=${{ secrets.IPINFO_TOKEN }}"
+          echo "Downloading MMDB database..."
+          curl -L "$DOWNLOAD_URL" -o "$DB_FILE"
+          # Check if the downloaded file is not empty to ensure success.
+          if [ ! -s "$DB_FILE" ]; then
+            echo "Database download failed or file is empty!"
+            exit 1
+          fi
+
+      # Step 3: Set up the Go environment.
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      # Step 4: Run the main Go application.
+      - name: Run Go Application
+        env:
+          # Pass the downloaded database path to the Go program.
+          DB_PATH: ipinfo_lite.mmdb
+        run: |
+          go mod tidy
+          go run .
+
+      # Step 5: Commit and push the generated files.
+      - name: Commit and Push Changes
+        run: |
+          # Configure git to use the built-in bot identity for this commit.
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          
+          # Create a new temporary branch to hold the results.
+          git checkout -b temp-geoip
+          
+          # Add all generated files from the output folder.
+          git add -f geoip/*.txt
+          
+          # Commit only if there are actual changes.
+          if git diff --staged --quiet; then
+            echo "No changes in generated files. Nothing to commit."
+            exit 0
+          fi
+          
+          # Commit with a conventional message and [skip ci] to prevent loops.
+          git commit -m "🤖 chore(geoip): auto-update geoip data [skip ci]"
+          
+          # Force push the results to the 'geoip' branch.
+          git push -f https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} temp-geoip:geoip
