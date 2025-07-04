@@ -33,7 +33,7 @@ jobs:
         run: |
           DB_FILE="ipinfo_lite.mmdb"
           # The URL uses the IPINFO_TOKEN secret for authentication.
-          DOWNLOAD_URL="https://ipinfo.io/data/free/country.mmdb?token=${{ secrets.IPINFO_TOKEN }}"
+          DOWNLOAD_URL="https://ipinfo.io/data/ipinfo_lite.mmdb?token=${{ secrets.IPINFO_TOKEN }}"
           echo "Downloading MMDB database..."
           curl -L "$DOWNLOAD_URL" -o "$DB_FILE"
           # Check if the downloaded file is not empty to ensure success.
