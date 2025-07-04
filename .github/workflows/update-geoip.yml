@@ -60,35 +60,35 @@ jobs:
           go mod tidy
           go run .
 
-      # Step 5: Commit and push the generated files to the 'geoip' branch.
-      - name: Commit and Push Changes
+      # Step 5: Sync new data with the geoip branch and commit if changes exist.
+      - name: Sync, Commit and Push to geoip branch
         run: |
-          # Configure git to use the built-in bot identity.
-          git config user.name 'github-actions[bot]'
-          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          # Clone the geoip branch into a separate directory.
+          git clone "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" --branch geoip --single-branch geoip_branch
           
-          # Create a new orphan branch with no history or files.
-          git checkout --orphan geoip-temp
+          # Use rsync to sync the newly generated files to the cloned branch directory.
+          # -a: archive mode (preserves permissions, etc.)
+          # -v: verbose output
+          # --delete: deletes files in the destination that no longer exist in the source.
+          rsync -av --delete --exclude='.git/' geoip/ geoip_branch/
           
-          # Clean the working directory from any old files.
-          git rm -rf .
+          # Navigate into the cloned branch directory.
+          cd geoip_branch
           
-          # Move the generated .txt files from the geoip subfolder to the root.
-          # The `|| true` prevents errors if the folder doesn't exist.
-          mv geoip/* . || true
-          
-          # Add all .txt files in the root to the staging area.
-          git add *.txt
-          
-          # Only commit if there are actual changes.
-          if git diff --staged --quiet; then
+          # Check if there are any changes. If no changes, exit successfully.
+          if git status --porcelain | grep -qE '^\s*[ADMRCU]'; then
+            echo "Changes detected. Proceeding with commit."
+          else
             echo "No changes in generated files. Nothing to commit."
             exit 0
           fi
           
-          # Commit with a conventional message and [skip ci] tag.
-          git commit -m "🤖 chore(geoip): auto-update geoip data [skip ci]"
+          # Configure git identity.
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
           
-          # Force push the temporary branch to the remote 'geoip' branch,
-          # completely replacing its content.
-          git push -f https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }} geoip-temp:geoip
+          # Add all changes, commit, and push.
+          # The push is now a standard push, not a force push.
+          git add .
+          git commit -m "🤖 chore(geoip): auto-update geoip data [skip ci]"
+          git push
