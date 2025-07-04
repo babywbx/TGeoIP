@@ -7,11 +7,14 @@ on:
   push:
     branches:
       - main
-    # Only run if main.go or the workflow file itself changes.
     paths:
       - 'main.go'
       - '.github/workflows/**'
-
+  
+  # Triggers the workflow on a schedule.
+  schedule:
+    - cron: '0 * * * *'
+  
   # Also allow manual runs from the Actions tab.
   workflow_dispatch:
 
