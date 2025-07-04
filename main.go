@@ -1,5 +1,6 @@
-// TGeoIP main application.
+// TGeoIP main application by wbx.
 // Fetches Telegram's IP ranges, finds reachable IPs, and sorts them by country.
+
 package main
 
 import (
@@ -20,14 +21,16 @@ import (
 	"inet.af/netaddr"
 )
 
-// --- Configuration Constants ---
+// Configuration Constants
 const (
 	// CidrListURL is the source for Telegram's official IP ranges.
 	CidrListURL = "https://core.telegram.org/resources/cidr.txt"
-	// DBDownloadURL is the template URL for the IPinfo MMDB database.
-	DBDownloadURL = "https://ipinfo.io/data/free/country.mmdb?token=%s"
-	// MaxPingWorkers is the number of concurrent ping operations.
-	MaxPingWorkers = 200
+	// MaxCheckers is the number of concurrent check operations.
+	MaxCheckers = 300
+	// CheckTimeout is the timeout for each TCP check.
+	CheckTimeout = 3 * time.Second
+	// CheckPort is the TCP port to check, 443 is standard for HTTPS.
+	CheckPort = "443"
 	// OutputFolder is the directory where result files are saved.
 	OutputFolder = "geoip"
 )
@@ -39,10 +42,14 @@ type geoRecord struct {
 
 // main is the application entry point.
 func main() {
+	// Flag Definitions
 	// Defines a -local flag for switching between execution modes.
 	localMode := flag.Bool("local", false, "Enable local mode to use local DB file.")
+	// Defines an -icmp flag to switch to ICMP ping mode.
+	useICMP := flag.Bool("icmp", false, "Use ICMP ping instead of the default TCP check.")
 	flag.Parse()
 
+	// Mode-dependent setup
 	var dbPath string
 	if *localMode {
 		log.Println("--- Running in Local Mode ---")
@@ -55,6 +62,7 @@ func main() {
 		}
 	}
 
+	// Load GeoIP database
 	log.Printf("Loading GeoIP database from: %s", dbPath)
 	db, err := maxminddb.Open(dbPath)
 	if err != nil {
@@ -62,21 +70,26 @@ func main() {
 	}
 	defer db.Close()
 
-	log.Println("Step 1: Downloading CIDR list...")
-	cidrs, err := downloadCIDRs(CidrListURL)
+	// Main Execution Logic
+	// Load CIDR list from source
+	log.Println("Step 1: Loading CIDR list from source...")
+	cidrs, err := loadCIDRs(CidrListURL)
 	if err != nil {
-		log.Fatalf("Fatal: Failed to download CIDR list: %v", err)
+		log.Fatalf("Fatal: Failed to load CIDR list: %v", err)
 	}
-	log.Printf("Loaded %d IPv4 CIDR ranges.", len(cidrs))
+	log.Printf("Successfully loaded %d IPv4 CIDR ranges.", len(cidrs))
 
+	// Expand CIDRs to all host IPs
 	log.Println("Step 2: Expanding CIDRs to all host IPs...")
 	allIPs := expandCIDRsToIPs(cidrs)
 	log.Printf("Expanded to %d total IPs to check.", len(allIPs))
 
+	// Find reachable IPs
 	log.Println("Step 3: Finding reachable IPs...")
-	reachableIPs := pingIPs(allIPs)
+	reachableIPs := findReachableIPs(allIPs, *useICMP)
 	log.Printf("Found %d reachable IPs.", len(reachableIPs))
 
+	// Group IPs by country
 	if len(reachableIPs) > 0 {
 		log.Println("Step 4: Grouping IPs by country...")
 		countryMap := groupByCountryFromDB(reachableIPs, db)
@@ -86,6 +99,7 @@ func main() {
 		log.Println("No reachable IPs found, nothing to save.")
 	}
 
+	// Save results to files
 	log.Println("Process completed successfully.")
 }
 
@@ -106,8 +120,8 @@ func groupByCountryFromDB(ips []string, db *maxminddb.Reader) map[string][]strin
 	return countryMap
 }
 
-// downloadCIDRs fetches the list of CIDRs from the specified URL.
-func downloadCIDRs(url string) ([]string, error) {
+// loadCIDRs fetches the list of CIDRs from the specified URL.
+func loadCIDRs(url string) ([]string, error) {
 	resp, err := http.Get(url)
 	if err != nil {
 		return nil, err
@@ -150,32 +164,58 @@ func expandCIDRsToIPs(cidrs []string) []string {
 	return allIPs
 }
 
-// pingIPs uses a worker pool to ping IPs concurrently with a retry mechanism.
-func pingIPs(ips []string) []string {
-	sem := make(chan struct{}, MaxPingWorkers)
+// findReachableIPs uses a worker pool to check for reachable IPs.
+// It defaults to a reliable TCP check on port 443.
+// If useICMP is true, it falls back to using the ICMP ping command.
+func findReachableIPs(ips []string, useICMP bool) []string {
+	sem := make(chan struct{}, MaxCheckers)
 	results := make(chan string, len(ips))
 	var wg sync.WaitGroup
-	log.Printf("Pinging %d IPs with %d workers (up to 3 retries each)...", len(ips), MaxPingWorkers)
-	for _, ip := range ips {
-		wg.Add(1)
-		go func(ip string) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			for i := 0; i < 3; i++ {
-				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-				defer cancel()
-				cmd := exec.CommandContext(ctx, "ping", "-c", "1", "-W", "1", ip)
-				if err := cmd.Run(); err == nil {
-					results <- ip
-					return
+
+	if useICMP {
+		// ICMP Ping Mode
+		log.Printf("Checking %d IPs using ICMP ping with %d workers...", len(ips), MaxCheckers)
+		for _, ip := range ips {
+			wg.Add(1)
+			go func(ip string) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				for i := 0; i < 3; i++ {
+					ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+					defer cancel()
+					cmd := exec.CommandContext(ctx, "ping", "-c", "1", "-W", "1", ip)
+					if err := cmd.Run(); err == nil {
+						results <- ip
+						return
+					}
+					time.Sleep(200 * time.Millisecond)
 				}
-				time.Sleep(200 * time.Millisecond)
-			}
-		}(ip)
+			}(ip)
+		}
+	} else {
+		// Default TCP Check Mode
+		log.Printf("Checking %d IPs on TCP port %s with %d workers...", len(ips), CheckPort, MaxCheckers)
+		for _, ip := range ips {
+			wg.Add(1)
+			go func(ip string) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+
+				address := net.JoinHostPort(ip, CheckPort)
+				conn, err := net.DialTimeout("tcp", address, CheckTimeout)
+				if err == nil {
+					conn.Close()
+					results <- ip
+				}
+			}(ip)
+		}
 	}
+
 	wg.Wait()
 	close(results)
+
 	var reachableIPs []string
 	for ip := range results {
 		reachableIPs = append(reachableIPs, ip)
