@@ -5,6 +5,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"flag"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -231,15 +233,53 @@ func findReachableIPs(ips []string, useICMP bool) []string {
 	return reachableIPs
 }
 
-// saveResultsToFiles creates the output directory and saves all result files.
+// saveResultsToFiles creates the output directory and saves all result files after sorting them.
 func saveResultsToFiles(data map[string][]string) {
 	os.MkdirAll(OutputFolder, 0755)
 	for country, ipList := range data {
+		// Sort the plain IP list before writing.
+		sortIPStrings(ipList)
 		filePath := fmt.Sprintf("%s/%s.txt", OutputFolder, country)
 		writeLines(filePath, ipList)
+
+		// Aggregate CIDRs from the IP list.
+		cidrList := aggregateCIDRs(ipList)
+
+		// Sort the resulting CIDR list before writing.
+		sortCIDRStrings(cidrList)
 		cidrPath := fmt.Sprintf("%s/%s-CIDR.txt", OutputFolder, country)
-		writeLines(cidrPath, aggregateCIDRs(ipList))
+		writeLines(cidrPath, cidrList)
 	}
+}
+
+// sortIPStrings sorts a slice of IP address strings numerically.
+func sortIPStrings(ips []string) {
+	sort.Slice(ips, func(i, j int) bool {
+		ipA := net.ParseIP(ips[i])
+		ipB := net.ParseIP(ips[j])
+		if ipA == nil || ipB == nil {
+			return ips[i] < ips[j] // Fallback to string sort if parsing fails
+		}
+		// Use To16() to ensure both IPv4 and IPv6 are compared correctly as 16-byte slices.
+		return bytes.Compare(ipA.To16(), ipB.To16()) < 0
+	})
+}
+
+// sortCIDRStrings sorts a slice of CIDR notation strings correctly.
+func sortCIDRStrings(cidrs []string) {
+	sort.Slice(cidrs, func(i, j int) bool {
+		prefixA, errA := netaddr.ParseIPPrefix(cidrs[i])
+		prefixB, errB := netaddr.ParseIPPrefix(cidrs[j])
+		if errA != nil || errB != nil {
+			return cidrs[i] < cidrs[j] // Fallback
+		}
+		// Compare IP addresses first, then prefix lengths
+		ipCompare := prefixA.IP().Compare(prefixB.IP())
+		if ipCompare != 0 {
+			return ipCompare < 0
+		}
+		return prefixA.Bits() < prefixB.Bits()
+	})
 }
 
 // aggregateCIDRs merges a list of IPs into the smallest possible set of CIDRs.
