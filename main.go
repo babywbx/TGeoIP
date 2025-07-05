@@ -49,6 +49,8 @@ func main() {
 	useICMP := flag.Bool("icmp", false, "Use ICMP ping instead of the default TCP check.")
 	// Defines a -limit flag to limit the number of IPs to check.
 	limit := flag.Int("limit", 0, "Limit the number of IPs to check (0 means no limit).")
+	// Defines a -skip-check flag to skip the connectivity check.
+	skipCheck := flag.Bool("skip-check", false, "Skip connectivity check and classify all expanded IPs.")
 	flag.Parse()
 
 	// Mode-dependent setup
@@ -92,19 +94,26 @@ func main() {
 		allIPs = allIPs[:*limit]
 	}
 
-	// Find reachable IPs
-	log.Println("Step 3: Finding reachable IPs...")
-	reachableIPs := findReachableIPs(allIPs, *useICMP)
-	log.Printf("Found %d reachable IPs.", len(reachableIPs))
+	// Conditionally check for reachable IPs or use all of them.
+	var ipsToProcess []string
+	if *skipCheck {
+		log.Println(">>> Skipping connectivity check as per -skip-check flag. <<<")
+		ipsToProcess = allIPs
+	} else {
+		// Find reachable IPs
+		log.Println("Step 3: Finding reachable IPs...")
+		ipsToProcess = findReachableIPs(allIPs, *useICMP)
+		log.Printf("Found %d reachable IPs.", len(ipsToProcess))
+	}
 
 	// Group IPs by country
-	if len(reachableIPs) > 0 {
+	if len(ipsToProcess) > 0 {
 		log.Println("Step 4: Grouping IPs by country...")
-		countryMap := groupByCountryFromDB(reachableIPs, db)
+		countryMap := groupByCountryFromDB(ipsToProcess, db)
 		log.Printf("Saving results for %d countries to the '%s/' directory.", len(countryMap), OutputFolder)
 		saveResultsToFiles(countryMap)
 	} else {
-		log.Println("No reachable IPs found, nothing to save.")
+		log.Println("No IPs to process or save.")
 	}
 
 	// Save results to files
