@@ -48,6 +48,10 @@ This project aims to provide an up-to-date, reliable source of categorized Teleg
 - **🛡️ Reliable**: Defaults to a TCP port 443 check, which is more reliable than ICMP ping in cloud environments.
 - **🌍 Geolocation Lookup**: Uses a local MMDB database for fast and offline geo-lookups.
 - **📝 Dual-Format Output**: Generates both plain IP lists (`US.txt`) and aggregated CIDR lists (`US-CIDR.txt`).
+- **🔄 Retry Mechanism**: Implements 3-retry logic with 200ms intervals for better reliability.
+- **⏱️ Optimized Timeouts**: Uses 3-second timeouts for better network compatibility.
+- **🔍 Dual Check Modes**: Support for ICMP-only, TCP-only, or combined ICMP/TCP checks.
+- **⚡ Skip Check Option**: Bypass connectivity checks for faster processing when needed.
 
 <div align="right">
 
@@ -102,13 +106,29 @@ go run . -local -limit 1000
 
 # Run using the ICMP ping method
 go run . -local -icmp
+
+# Skip connectivity checks for faster processing
+go run . -local -skip-check
+
+# Use dual ICMP/TCP check mode (either passes)
+go run . -local -full 1
+
+# Use dual ICMP/TCP check mode (both must pass)
+go run . -local -full 2
+
+# Combine multiple flags for specific use cases
+go run . -local -full 1 -limit 500
 ```
 
 ### Command-line Flags
 
-- ``-local``: Enables local mode (uses `ipinfo_lite.mmdb` from the current directory).
-- ``-icmp``: Switches the check method from the default TCP dial to ICMP ping.
-- ``-limit <number>``: Limits the number of IPs to check (e.g., `-limit 500`). `0` means no limit.
+- `-local`: Enables local mode (uses `ipinfo_lite.mmdb` from the current directory).
+- `-icmp`: Switches the check method from the default TCP dial to ICMP ping.
+- `-limit <number>`: Limits the number of IPs to check (e.g., `-limit 500`). `0` means no limit.
+- `-skip-check`: Skips connectivity checks and classifies all expanded IPs (useful for faster processing).
+- `-full <mode>`: Uses both ICMP and TCP checks together:
+  - `-full 1`: Either ICMP or TCP passes (more lenient)
+  - `-full 2`: Both ICMP and TCP must pass (more strict)
 
 <div align="right">
 
