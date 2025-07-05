@@ -29,9 +29,7 @@ const (
 	CidrListURL = "https://core.telegram.org/resources/cidr.txt"
 	// MaxCheckers is the number of concurrent check operations.
 	MaxCheckers = 200
-	// CheckTimeout is the timeout for each TCP check.
-	CheckTimeout = 3 * time.Second
-	// CheckPort is the TCP port to check, 443 is standard for HTTPS.
+	// CheckPort is the TCP port for connectivity tests.
 	CheckPort = "443"
 	// OutputFolder is the directory where result files are saved.
 	OutputFolder = "geoip"
@@ -177,6 +175,7 @@ func expandCIDRsToIPs(cidrs []string) []string {
 // findReachableIPs uses a worker pool to check for reachable IPs.
 // It defaults to a reliable TCP check on port 443.
 // If useICMP is true, it falls back to using the ICMP ping command.
+// It includes a 3-try retry mechanism for both TCP and ICMP checks.
 func findReachableIPs(ips []string, useICMP bool) []string {
 	sem := make(chan struct{}, MaxCheckers)
 	results := make(chan string, len(ips))
@@ -184,7 +183,7 @@ func findReachableIPs(ips []string, useICMP bool) []string {
 
 	if useICMP {
 		// ICMP Ping Mode
-		log.Printf("Checking %d IPs using ICMP ping with %d workers...", len(ips), MaxCheckers)
+		log.Printf("Checking %d IPs using ICMP ping with %d workers (up to 3 retries each)...", len(ips), MaxCheckers)
 		for _, ip := range ips {
 			wg.Add(1)
 			go func(ip string) {
@@ -204,8 +203,8 @@ func findReachableIPs(ips []string, useICMP bool) []string {
 			}(ip)
 		}
 	} else {
-		// Default TCP Check Mode
-		log.Printf("Checking %d IPs on TCP port %s with %d workers...", len(ips), CheckPort, MaxCheckers)
+		// Default TCP Check Mode with Retries
+		log.Printf("Checking %d IPs on TCP port %s with %d workers (up to 3 retries each)...", len(ips), CheckPort, MaxCheckers)
 		for _, ip := range ips {
 			wg.Add(1)
 			go func(ip string) {
@@ -213,11 +212,15 @@ func findReachableIPs(ips []string, useICMP bool) []string {
 				sem <- struct{}{}
 				defer func() { <-sem }()
 
-				address := net.JoinHostPort(ip, CheckPort)
-				conn, err := net.DialTimeout("tcp", address, CheckTimeout)
-				if err == nil {
-					conn.Close()
-					results <- ip
+				for i := 0; i < 3; i++ {
+					address := net.JoinHostPort(ip, CheckPort)
+					conn, err := net.DialTimeout("tcp", address, 2*time.Second)
+					if err == nil {
+						conn.Close()
+						results <- ip
+						return
+					}
+					time.Sleep(200 * time.Millisecond)
 				}
 			}(ip)
 		}
