@@ -48,6 +48,10 @@ TGeoIP 是一个自动化工具，它能自动获取 Telegram 最新的官方 IP
 - **🛡️ 可靠性高**: 默认使用 TCP 443 端口检测，在云环境中比 ICMP ping 更可靠。
 - **🌍 地理位置查询**: 使用本地 MMDB 数据库，查询速度快且支持离线。
 - **📝 双格式输出**: 同时生成纯 IP 列表 (`US.txt`) 和聚合后的 CIDR 列表 (`US-CIDR.txt`)。
+- **🔄 重试机制**: 实现 3 次重试逻辑，每次间隔 200ms，提高可靠性。
+- **⏱️ 优化超时**: 使用 3 秒超时，更好地适应网络环境。
+- **🔍 双重检测模式**: 支持仅 ICMP、仅 TCP 或 ICMP/TCP 组合检测。
+- **⚡ 跳过检测选项**: 可跳过连通性检测，实现更快的处理速度。
 
 <div align="right">
 
@@ -102,14 +106,28 @@ go run . -local -limit 1000
 
 # 使用 ICMP ping 模式运行
 go run . -local -icmp
+
+# 跳过连通性检测，实现更快的处理
+go run . -local -skip-check
+
+# 使用双重 ICMP/TCP 检测模式（其中一个通过即可）
+go run . -local -full 1
+
+# 使用双重 ICMP/TCP 检测模式（两个都必须通过）
+go run . -local -full 2
+
+# 组合多个参数用于特定场景
+go run . -local -full 1 -limit 500
 ```
 
 ### 命令行参数
--local: 启用本地模式（会从当前目录读取 ipinfo_lite.mmdb）。
-
--icmp: 将检测方法从默认的 TCP 连接切换为 ICMP ping。
-
--limit <数量>: 限制要检测的 IP 数量 (例如 -limit 500)。0 代表不限制。
+- `-local`: 启用本地模式（会从当前目录读取 `ipinfo_lite.mmdb`）。
+- `-icmp`: 将检测方法从默认的 TCP 连接切换为 ICMP ping。
+- `-limit <数量>`: 限制要检测的 IP 数量 (例如 `-limit 500`)。`0` 代表不限制。
+- `-skip-check`: 跳过连通性检测，对所有扩展的 IP 进行分类（用于快速处理）。
+- `-full <模式>`: 同时使用 ICMP 和 TCP 检测：
+  - `-full 1`: ICMP 或 TCP 其中一个通过即可（更宽松）
+  - `-full 2`: ICMP 和 TCP 两个都必须通过（更严格）
 
 <div align="right">
 
