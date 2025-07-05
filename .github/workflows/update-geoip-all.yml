@@ -9,7 +9,7 @@ on:
       - main
     paths:
       - 'main.go'
-      - '.github/workflows/**'
+      - '.github/workflows/update-geoip-all.yml'
   
   # Triggers the workflow on a schedule (daily at midnight UTC).
   schedule:
@@ -71,6 +71,10 @@ jobs:
           git init
           git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
           
+          # Configure git identity first
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          
           # Always create or checkout the geoip-all branch
           if git fetch origin geoip-all 2>/dev/null; then
             echo "geoip-all branch exists, checking it out"
@@ -95,10 +99,6 @@ jobs:
           
           # Always commit updates to ensure data freshness
           echo "Proceeding with daily update commit."
-          
-          # Configure git identity.
-          git config user.name 'github-actions[bot]'
-          git config user.email 'github-actions[bot]@users.noreply.github.com'
           
           # Add all changes, commit, and push.
           git add .
