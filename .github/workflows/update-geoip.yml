@@ -9,7 +9,7 @@ on:
       - main
     paths:
       - 'main.go'
-      - '.github/workflows/**'
+      - '.github/workflows/update-geoip.yml'
   
   # Triggers the workflow on a schedule.
   schedule:
@@ -63,8 +63,30 @@ jobs:
       # Step 5: Sync new data with the geoip branch and commit if changes exist.
       - name: Sync, Commit and Push to geoip branch
         run: |
-          # Clone the geoip branch into a separate directory.
-          git clone "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" --branch geoip --single-branch geoip_branch
+          # Create a temporary directory for the geoip branch
+          mkdir geoip_branch
+          cd geoip_branch
+          
+          # Initialize git repository
+          git init
+          git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+          
+          # Configure git identity first
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          
+          # Always create or checkout the geoip branch
+          if git fetch origin geoip 2>/dev/null; then
+            echo "geoip branch exists, checking it out"
+            git checkout geoip
+          else
+            echo "geoip branch does not exist, creating new branch"
+            git checkout -b geoip
+            # Create an initial empty commit for new branch
+            git commit --allow-empty -m "🤖 chore(geoip): initialize branch [skip ci]"
+          fi
+          
+          cd ..
           
           # Use rsync to sync the newly generated files to the cloned branch directory.
           # -a: archive mode (preserves permissions, etc.)
@@ -83,12 +105,7 @@ jobs:
             exit 0
           fi
           
-          # Configure git identity.
-          git config user.name 'github-actions[bot]'
-          git config user.email 'github-actions[bot]@users.noreply.github.com'
-          
           # Add all changes, commit, and push.
-          # The push is now a standard push, not a force push.
           git add .
           git commit -m "🤖 chore(geoip): auto-update geoip data [skip ci]"
-          git push
+          git push origin geoip
