@@ -51,7 +51,14 @@ func main() {
 	limit := flag.Int("limit", 0, "Limit the number of IPs to check (0 means no limit).")
 	// Defines a -skip-check flag to skip the connectivity check.
 	skipCheck := flag.Bool("skip-check", false, "Skip connectivity check and classify all expanded IPs.")
+	// Defines a -full flag to use both ICMP and TCP checks together.
+	fullMode := flag.Int("full", 0, "Use both ICMP and TCP checks: 1=either passes, 2=both must pass.")
 	flag.Parse()
+
+	// Validate -full flag value
+	if *fullMode != 0 && (*fullMode < 1 || *fullMode > 2) {
+		log.Fatalf("Fatal: Invalid -full value: %d. Only values 1 (either passes) or 2 (both must pass) are allowed.", *fullMode)
+	}
 
 	// Mode-dependent setup
 	var dbPath string
@@ -102,7 +109,11 @@ func main() {
 	} else {
 		// Find reachable IPs
 		log.Println("Step 3: Finding reachable IPs...")
-		ipsToProcess = findReachableIPs(allIPs, *useICMP)
+		if *fullMode > 0 {
+			ipsToProcess = findReachableIPsFull(allIPs, *fullMode)
+		} else {
+			ipsToProcess = findReachableIPs(allIPs, *useICMP)
+		}
 		log.Printf("Found %d reachable IPs.", len(ipsToProcess))
 	}
 
@@ -200,9 +211,9 @@ func findReachableIPs(ips []string, useICMP bool) []string {
 				sem <- struct{}{}
 				defer func() { <-sem }()
 				for i := 0; i < 3; i++ {
-					ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+					ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 					defer cancel()
-					cmd := exec.CommandContext(ctx, "ping", "-c", "1", "-W", "1", ip)
+					cmd := exec.CommandContext(ctx, "ping", "-c", "1", "-W", "2", ip)
 					if err := cmd.Run(); err == nil {
 						results <- ip
 						return
@@ -223,7 +234,7 @@ func findReachableIPs(ips []string, useICMP bool) []string {
 
 				for i := 0; i < 3; i++ {
 					address := net.JoinHostPort(ip, CheckPort)
-					conn, err := net.DialTimeout("tcp", address, 2*time.Second)
+					conn, err := net.DialTimeout("tcp", address, 3*time.Second)
 					if err == nil {
 						conn.Close()
 						results <- ip
@@ -233,6 +244,82 @@ func findReachableIPs(ips []string, useICMP bool) []string {
 				}
 			}(ip)
 		}
+	}
+
+	wg.Wait()
+	close(results)
+
+	var reachableIPs []string
+	for ip := range results {
+		reachableIPs = append(reachableIPs, ip)
+	}
+	return reachableIPs
+}
+
+// findReachableIPsFull performs both ICMP and TCP checks on each IP.
+// fullMode: 1 = either ICMP or TCP passes, 2 = both must pass
+func findReachableIPsFull(ips []string, fullMode int) []string {
+	sem := make(chan struct{}, MaxCheckers)
+	results := make(chan string, len(ips))
+	var wg sync.WaitGroup
+
+	var modeDesc string
+	if fullMode == 1 {
+		modeDesc = "either ICMP or TCP"
+	} else {
+		modeDesc = "both ICMP and TCP"
+	}
+	log.Printf("Checking %d IPs using %s with %d workers (up to 3 retries each)...", len(ips), modeDesc, MaxCheckers)
+
+	for _, ip := range ips {
+		wg.Add(1)
+		go func(ip string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			icmpPassed := false
+			tcpPassed := false
+
+			// Check ICMP
+			for i := 0; i < 3; i++ {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				cmd := exec.CommandContext(ctx, "ping", "-c", "1", "-W", "3", ip)
+				if err := cmd.Run(); err == nil {
+					icmpPassed = true
+					cancel()
+					break
+				}
+				cancel()
+				time.Sleep(200 * time.Millisecond)
+			}
+
+			// Check TCP
+			for i := 0; i < 3; i++ {
+				address := net.JoinHostPort(ip, CheckPort)
+				conn, err := net.DialTimeout("tcp", address, 5*time.Second)
+				if err == nil {
+					conn.Close()
+					tcpPassed = true
+					break
+				}
+				time.Sleep(200 * time.Millisecond)
+			}
+
+			// Determine if IP should be considered reachable based on fullMode
+			switch fullMode {
+			case 1:
+				// Mode 1: Either ICMP or TCP passes
+				if icmpPassed || tcpPassed {
+					results <- ip
+				}
+			case 2:
+				// Mode 2: Both ICMP and TCP must pass
+				if icmpPassed && tcpPassed {
+					results <- ip
+				}
+			}
+		}(ip)
 	}
 
 	wg.Wait()
