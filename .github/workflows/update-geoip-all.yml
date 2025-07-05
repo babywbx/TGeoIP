@@ -1,0 +1,101 @@
+# Workflow By wbx
+name: Update TGeoIP All Data
+
+# Defines the triggers for this workflow.
+on:
+  # Trigger on pushes to the main branch.
+  push:
+    branches:
+      - main
+    paths:
+      - 'main.go'
+      - '.github/workflows/**'
+  
+  # Triggers the workflow on a schedule (daily at midnight UTC).
+  schedule:
+    - cron: '0 0 * * *'
+  
+  # Also allow manual runs from the Actions tab.
+  workflow_dispatch:
+
+# Grant write permissions to the GITHUB_TOKEN for pushing commit results.
+permissions:
+  contents: write
+
+# Define the main job for this workflow.
+jobs:
+  update-geoip-all:
+    runs-on: ubuntu-latest
+    steps:
+      # Step 1: Check out the repository's code to the runner.
+      - name: Checkout main branch
+        uses: actions/checkout@v4
+
+      # Step 2: Download the MMDB database required by the application.
+      - name: Download IPinfo MMDB Database
+        run: |
+          DB_FILE="ipinfo_lite.mmdb"
+          # The URL uses the IPINFO_TOKEN secret for authentication.
+          DOWNLOAD_URL="https://ipinfo.io/data/ipinfo_lite.mmdb?token=${{ secrets.IPINFO_TOKEN }}"
+          echo "Downloading MMDB database..."
+          curl -L "$DOWNLOAD_URL" -o "$DB_FILE"
+          # Check if the downloaded file is not empty to ensure success.
+          if [ ! -s "$DB_FILE" ]; then
+            echo "Database download failed or file is empty!"
+            exit 1
+          fi
+
+      # Step 3: Set up the Go environment.
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.4'
+
+      # Step 4: Run the main Go application with -skip-check flag.
+      - name: Run Go Application (All IPs)
+        env:
+          # Pass the downloaded database path to the Go program.
+          DB_PATH: ipinfo_lite.mmdb
+        run: |
+          go mod tidy
+          go run . -skip-check
+
+      # Step 5: Sync new data with the geoip-all branch and commit if changes exist.
+      - name: Sync, Commit and Push to geoip-all branch
+        run: |
+          # Clone the geoip-all branch into a separate directory.
+          git clone "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" --branch geoip-all --single-branch geoip_all_branch || {
+            # If branch doesn't exist, create it from scratch
+            mkdir geoip_all_branch
+            cd geoip_all_branch
+            git init
+            git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+            git checkout -b geoip-all
+            cd ..
+          }
+          
+          # Use rsync to sync the newly generated files to the cloned branch directory.
+          # -a: archive mode (preserves permissions, etc.)
+          # -v: verbose output
+          # --delete: deletes files in the destination that no longer exist in the source.
+          rsync -av --delete --exclude='.git/' geoip/ geoip_all_branch/
+          
+          # Navigate into the cloned branch directory.
+          cd geoip_all_branch
+          
+          # Check if there are any changes. If no changes, exit successfully.
+          if git status --porcelain | grep -qE '^\s*[ADMRCU]'; then
+            echo "Changes detected. Proceeding with commit."
+          else
+            echo "No changes in generated files. Nothing to commit."
+            exit 0
+          fi
+          
+          # Configure git identity.
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          
+          # Add all changes, commit, and push.
+          git add .
+          git commit -m "🤖 chore(geoip-all): auto-update all IP geoip data [skip ci]"
+          git push origin geoip-all
