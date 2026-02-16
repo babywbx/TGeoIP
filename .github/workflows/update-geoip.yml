@@ -3,20 +3,16 @@ name: Update TGeoIP Data
 
 # Defines the triggers for this workflow.
 on:
-  # Trigger on pushes to the main branch.
-  push:
-    branches:
-      - main
-    paths:
-      - 'main.go'
-      - '.github/workflows/update-geoip.yml'
-  
   # Triggers the workflow on a schedule.
   schedule:
     - cron: '0 */12 * * *'
-  
+
   # Also allow manual runs from the Actions tab.
   workflow_dispatch:
+
+concurrency:
+  group: update-geoip
+  cancel-in-progress: true
 
 # Grant write permissions to the GITHUB_TOKEN for pushing commit results.
 permissions:
