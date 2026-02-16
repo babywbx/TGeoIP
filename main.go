@@ -11,16 +11,18 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"math/bits"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/exec"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/oschwald/maxminddb-golang"
-	"inet.af/netaddr"
 )
 
 // Configuration Constants
@@ -366,45 +368,96 @@ func sortIPStrings(ips []string) {
 
 // sortCIDRStrings sorts a slice of CIDR notation strings correctly.
 func sortCIDRStrings(cidrs []string) {
-	sort.Slice(cidrs, func(i, j int) bool {
-		prefixA, errA := netaddr.ParseIPPrefix(cidrs[i])
-		prefixB, errB := netaddr.ParseIPPrefix(cidrs[j])
+	slices.SortFunc(cidrs, func(a, b string) int {
+		prefixA, errA := netip.ParsePrefix(a)
+		prefixB, errB := netip.ParsePrefix(b)
 		if errA != nil || errB != nil {
-			return cidrs[i] < cidrs[j] // Fallback
+			return strings.Compare(a, b)
 		}
-		// Compare IP addresses first, then prefix lengths
-		ipCompare := prefixA.IP().Compare(prefixB.IP())
-		if ipCompare != 0 {
-			return ipCompare < 0
+		if c := prefixA.Addr().Compare(prefixB.Addr()); c != 0 {
+			return c
 		}
-		return prefixA.Bits() < prefixB.Bits()
+		return prefixA.Bits() - prefixB.Bits()
 	})
 }
 
 // aggregateCIDRs merges a list of IPs into the smallest possible set of CIDRs.
 func aggregateCIDRs(ips []string) []string {
-	var builder netaddr.IPSetBuilder
-	if ips == nil {
+	if len(ips) == 0 {
 		return nil
 	}
-	for _, ipStr := range ips {
-		if ip, err := netaddr.ParseIP(ipStr); err == nil {
-			builder.Add(ip)
+
+	// Parse all IPs
+	addrs := make([]netip.Addr, 0, len(ips))
+	for _, s := range ips {
+		if a, err := netip.ParseAddr(s); err == nil {
+			addrs = append(addrs, a)
 		}
 	}
-	ipSet, _ := builder.IPSet()
-	if ipSet == nil {
+	if len(addrs) == 0 {
 		return nil
 	}
-	var cidrs []string
-	ranges := ipSet.Ranges()
-	for _, r := range ranges {
-		prefixes := r.Prefixes()
-		for _, p := range prefixes {
-			cidrs = append(cidrs, p.String())
+
+	// Sort and deduplicate
+	slices.SortFunc(addrs, netip.Addr.Compare)
+	addrs = slices.Compact(addrs)
+
+	// Merge contiguous ranges into prefixes
+	var result []string
+	lo := addrToUint32(addrs[0])
+	hi := lo
+	for _, a := range addrs[1:] {
+		v := addrToUint32(a)
+		if v == hi+1 {
+			hi = v
+		} else {
+			for _, p := range rangeToPrefixes(lo, hi) {
+				result = append(result, p.String())
+			}
+			lo = v
+			hi = v
 		}
 	}
-	return cidrs
+	for _, p := range rangeToPrefixes(lo, hi) {
+		result = append(result, p.String())
+	}
+	return result
+}
+
+// addrToUint32 converts a netip.Addr to a uint32 (IPv4 only).
+func addrToUint32(a netip.Addr) uint32 {
+	b := a.As4()
+	return uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
+}
+
+// uint32ToAddr converts a uint32 back to a netip.Addr (IPv4).
+func uint32ToAddr(n uint32) netip.Addr {
+	return netip.AddrFrom4([4]byte{byte(n >> 24), byte(n >> 16), byte(n >> 8), byte(n)})
+}
+
+// rangeToPrefixes decomposes a contiguous IP range [lo, hi] into CIDR prefixes.
+func rangeToPrefixes(lo, hi uint32) []netip.Prefix {
+	var prefixes []netip.Prefix
+	cur := uint64(lo)
+	end := uint64(hi)
+	for cur <= end {
+		// Alignment constraint: largest power-of-2 block at cur
+		tz := 32
+		if cur != 0 {
+			tz = bits.TrailingZeros64(cur)
+			if tz > 32 {
+				tz = 32
+			}
+		}
+		maxBits := tz
+		// Don't exceed the remaining range
+		for maxBits > 0 && cur+(1<<maxBits)-1 > end {
+			maxBits--
+		}
+		prefixes = append(prefixes, netip.PrefixFrom(uint32ToAddr(uint32(cur)), 32-maxBits))
+		cur += 1 << maxBits
+	}
+	return prefixes
 }
 
 // incrementIP treats an IP address as a big-endian integer and increments it by one.
