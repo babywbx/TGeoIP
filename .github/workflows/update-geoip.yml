@@ -98,15 +98,13 @@ jobs:
           # Navigate into the cloned branch directory.
           cd geoip_branch
           
-          # Check if there are any changes. If no changes, exit successfully.
-          if git status --porcelain | grep -qE '^\s*[ADMRCU]'; then
-            echo "Changes detected. Proceeding with commit."
-          else
+          # Stage all changes first, then check if there are any.
+          git add .
+          if git diff --staged --quiet; then
             echo "No changes in generated files. Nothing to commit."
             exit 0
           fi
-          
-          # Add all changes, commit, and push.
-          git add .
+
+          echo "Changes detected. Proceeding with commit."
           git commit -m "🤖 chore(geoip): auto-update geoip data [skip ci]"
           git push origin geoip

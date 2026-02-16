@@ -98,13 +98,13 @@ jobs:
           # Navigate into the cloned branch directory.
           cd geoip_all_branch
           
-          # Check if there are any changes to commit
-          if git diff --staged --quiet && git diff --quiet; then
+          # Stage all changes first, then check if there are any.
+          git add .
+          if git diff --staged --quiet; then
             echo "No changes detected, creating empty commit to maintain daily update schedule"
             git commit --allow-empty -m "🤖 chore(geoip-all): daily update check - no changes [skip ci]"
           else
             echo "Changes detected, committing updates"
-            git add .
             git commit -m "🤖 chore(geoip-all): daily update all IP geoip data [skip ci]"
           fi
           
