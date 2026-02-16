@@ -152,7 +152,8 @@ func groupByCountryFromDB(ips []string, db *maxminddb.Reader) map[string][]strin
 
 // loadCIDRs fetches the list of CIDRs from the specified URL.
 func loadCIDRs(url string) ([]string, error) {
-	resp, err := http.Get(url)
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Get(url)
 	if err != nil {
 		return nil, err
 	}
@@ -214,9 +215,10 @@ func findReachableIPs(ips []string, useICMP bool) []string {
 				defer func() { <-sem }()
 				for i := 0; i < 3; i++ {
 					ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-					defer cancel()
 					cmd := exec.CommandContext(ctx, "ping", "-c", "1", "-W", "2", ip)
-					if err := cmd.Run(); err == nil {
+					err := cmd.Run()
+					cancel() // explicit cancel, not deferred
+					if err == nil {
 						results <- ip
 						return
 					}
