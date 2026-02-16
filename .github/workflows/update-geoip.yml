@@ -80,5 +80,5 @@ jobs:
           fi
 
           echo "Changes detected. Proceeding with commit."
-          git commit -m "🤖 chore(geoip): auto-update geoip data [skip ci]"
+          git commit -m "🤖 chore(geoip): auto-update geoip data"
           git push origin geoip

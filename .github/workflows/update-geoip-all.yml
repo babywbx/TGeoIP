@@ -75,11 +75,10 @@ jobs:
 
           git add .
           if git diff --staged --quiet; then
-            echo "No changes detected, creating empty commit to maintain daily update schedule"
-            git commit --allow-empty -m "🤖 chore(geoip-all): daily update check - no changes [skip ci]"
-          else
-            echo "Changes detected, committing updates"
-            git commit -m "🤖 chore(geoip-all): daily update all IP geoip data [skip ci]"
+            echo "No changes in generated files. Nothing to commit."
+            exit 0
           fi
 
+          echo "Changes detected. Proceeding with commit."
+          git commit -m "🤖 chore(geoip-all): auto-update geoip data"
           git push origin geoip-all
