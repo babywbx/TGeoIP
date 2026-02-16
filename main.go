@@ -5,7 +5,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"flag"
 	"fmt"
@@ -17,7 +16,6 @@ import (
 	"os"
 	"os/exec"
 	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -176,20 +174,27 @@ func loadCIDRs(url string) ([]string, error) {
 func expandCIDRsToIPs(cidrs []string) []string {
 	var allIPs []string
 	for _, cidr := range cidrs {
-		ip, ipnet, err := net.ParseCIDR(cidr)
+		prefix, err := netip.ParsePrefix(cidr)
 		if err != nil {
 			continue
 		}
-		var currentIPs []string
-		for ip := ip.Mask(ipnet.Mask); ipnet.Contains(ip); incrementIP(ip) {
-			ipCopy := make(net.IP, len(ip))
-			copy(ipCopy, ip)
-			currentIPs = append(currentIPs, ipCopy.String())
-		}
-		if len(currentIPs) > 2 {
-			allIPs = append(allIPs, currentIPs[1:len(currentIPs)-1]...)
+		prefix = prefix.Masked()
+		hostBits := 32 - prefix.Bits()
+		total := 1 << hostBits
+
+		addr := prefix.Addr()
+		if total > 2 {
+			// Skip network and broadcast addresses
+			addr = addr.Next()
+			for i := 0; i < total-2; i++ {
+				allIPs = append(allIPs, addr.String())
+				addr = addr.Next()
+			}
 		} else {
-			allIPs = append(allIPs, currentIPs...)
+			for i := 0; i < total; i++ {
+				allIPs = append(allIPs, addr.String())
+				addr = addr.Next()
+			}
 		}
 	}
 	return allIPs
@@ -201,11 +206,11 @@ func expandCIDRsToIPs(cidrs []string) []string {
 // It includes a 3-try retry mechanism for both TCP and ICMP checks.
 func findReachableIPs(ips []string, useICMP bool) []string {
 	sem := make(chan struct{}, MaxCheckers)
-	results := make(chan string, len(ips))
+	var mu sync.Mutex
+	var reachableIPs []string
 	var wg sync.WaitGroup
 
 	if useICMP {
-		// ICMP Ping Mode
 		log.Printf("Checking %d IPs using ICMP ping with %d workers (up to 3 retries each)...", len(ips), MaxCheckers)
 		for _, ip := range ips {
 			wg.Add(1)
@@ -217,9 +222,11 @@ func findReachableIPs(ips []string, useICMP bool) []string {
 					ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 					cmd := exec.CommandContext(ctx, "ping", "-c", "1", "-W", "2", ip)
 					err := cmd.Run()
-					cancel() // explicit cancel, not deferred
+					cancel()
 					if err == nil {
-						results <- ip
+						mu.Lock()
+						reachableIPs = append(reachableIPs, ip)
+						mu.Unlock()
 						return
 					}
 					time.Sleep(200 * time.Millisecond)
@@ -227,7 +234,6 @@ func findReachableIPs(ips []string, useICMP bool) []string {
 			}(ip)
 		}
 	} else {
-		// Default TCP Check Mode with Retries
 		log.Printf("Checking %d IPs on TCP port %s with %d workers (up to 3 retries each)...", len(ips), CheckPort, MaxCheckers)
 		for _, ip := range ips {
 			wg.Add(1)
@@ -235,13 +241,14 @@ func findReachableIPs(ips []string, useICMP bool) []string {
 				defer wg.Done()
 				sem <- struct{}{}
 				defer func() { <-sem }()
-
+				address := net.JoinHostPort(ip, CheckPort)
 				for i := 0; i < 3; i++ {
-					address := net.JoinHostPort(ip, CheckPort)
 					conn, err := net.DialTimeout("tcp", address, 3*time.Second)
 					if err == nil {
 						conn.Close()
-						results <- ip
+						mu.Lock()
+						reachableIPs = append(reachableIPs, ip)
+						mu.Unlock()
 						return
 					}
 					time.Sleep(200 * time.Millisecond)
@@ -251,12 +258,6 @@ func findReachableIPs(ips []string, useICMP bool) []string {
 	}
 
 	wg.Wait()
-	close(results)
-
-	var reachableIPs []string
-	for ip := range results {
-		reachableIPs = append(reachableIPs, ip)
-	}
 	return reachableIPs
 }
 
@@ -264,7 +265,8 @@ func findReachableIPs(ips []string, useICMP bool) []string {
 // fullMode: 1 = either ICMP or TCP passes, 2 = both must pass
 func findReachableIPsFull(ips []string, fullMode int) []string {
 	sem := make(chan struct{}, MaxCheckers)
-	results := make(chan string, len(ips))
+	var mu sync.Mutex
+	var reachableIPs []string
 	var wg sync.WaitGroup
 
 	var modeDesc string
@@ -289,18 +291,18 @@ func findReachableIPsFull(ips []string, fullMode int) []string {
 			for i := 0; i < 3; i++ {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				cmd := exec.CommandContext(ctx, "ping", "-c", "1", "-W", "3", ip)
-				if err := cmd.Run(); err == nil {
+				err := cmd.Run()
+				cancel()
+				if err == nil {
 					icmpPassed = true
-					cancel()
 					break
 				}
-				cancel()
 				time.Sleep(200 * time.Millisecond)
 			}
 
 			// Check TCP
+			address := net.JoinHostPort(ip, CheckPort)
 			for i := 0; i < 3; i++ {
-				address := net.JoinHostPort(ip, CheckPort)
 				conn, err := net.DialTimeout("tcp", address, 5*time.Second)
 				if err == nil {
 					conn.Close()
@@ -310,29 +312,22 @@ func findReachableIPsFull(ips []string, fullMode int) []string {
 				time.Sleep(200 * time.Millisecond)
 			}
 
-			// Determine if IP should be considered reachable based on fullMode
+			pass := false
 			switch fullMode {
 			case 1:
-				// Mode 1: Either ICMP or TCP passes
-				if icmpPassed || tcpPassed {
-					results <- ip
-				}
+				pass = icmpPassed || tcpPassed
 			case 2:
-				// Mode 2: Both ICMP and TCP must pass
-				if icmpPassed && tcpPassed {
-					results <- ip
-				}
+				pass = icmpPassed && tcpPassed
+			}
+			if pass {
+				mu.Lock()
+				reachableIPs = append(reachableIPs, ip)
+				mu.Unlock()
 			}
 		}(ip)
 	}
 
 	wg.Wait()
-	close(results)
-
-	var reachableIPs []string
-	for ip := range results {
-		reachableIPs = append(reachableIPs, ip)
-	}
 	return reachableIPs
 }
 
@@ -356,16 +351,23 @@ func saveResultsToFiles(data map[string][]string) {
 }
 
 // sortIPStrings sorts a slice of IP address strings numerically.
+// Pre-parses all IPs once to avoid O(N log N) re-parsing during sort.
 func sortIPStrings(ips []string) {
-	sort.Slice(ips, func(i, j int) bool {
-		ipA := net.ParseIP(ips[i])
-		ipB := net.ParseIP(ips[j])
-		if ipA == nil || ipB == nil {
-			return ips[i] < ips[j] // Fallback to string sort if parsing fails
-		}
-		// Use To16() to ensure both IPv4 and IPv6 are compared correctly as 16-byte slices.
-		return bytes.Compare(ipA.To16(), ipB.To16()) < 0
+	type ipEntry struct {
+		addr netip.Addr
+		orig string
+	}
+	entries := make([]ipEntry, len(ips))
+	for i, s := range ips {
+		a, _ := netip.ParseAddr(s)
+		entries[i] = ipEntry{a, s}
+	}
+	slices.SortFunc(entries, func(a, b ipEntry) int {
+		return a.addr.Compare(b.addr)
 	})
+	for i, e := range entries {
+		ips[i] = e.orig
+	}
 }
 
 // sortCIDRStrings sorts a slice of CIDR notation strings correctly.
@@ -462,24 +464,25 @@ func rangeToPrefixes(lo, hi uint32) []netip.Prefix {
 	return prefixes
 }
 
-// incrementIP treats an IP address as a big-endian integer and increments it by one.
-func incrementIP(ip net.IP) {
-	for j := len(ip) - 1; j >= 0; j-- {
-		ip[j]++
-		if ip[j] > 0 {
-			break
-		}
-	}
-}
-
 // writeLines writes a slice of strings to a file without a trailing newline.
 func writeLines(filePath string, lines []string) {
 	if len(lines) == 0 {
 		return
 	}
-	output := strings.Join(lines, "\n")
-	err := os.WriteFile(filePath, []byte(output), 0644)
+	f, err := os.Create(filePath)
 	if err != nil {
-		log.Printf("Error writing to file %s: %v", filePath, err)
+		log.Printf("Failed to create file %s: %v", filePath, err)
+		return
+	}
+	defer f.Close()
+	w := bufio.NewWriter(f)
+	for i, line := range lines {
+		w.WriteString(line)
+		if i < len(lines)-1 {
+			w.WriteByte('\n')
+		}
+	}
+	if err := w.Flush(); err != nil {
+		log.Printf("Failed to write file %s: %v", filePath, err)
 	}
 }
