@@ -1,6 +1,6 @@
 module github.com/babywbx/TGeoIP
 
-go 1.24.4
+go 1.26
 
 require (
 	github.com/oschwald/maxminddb-golang v1.13.1

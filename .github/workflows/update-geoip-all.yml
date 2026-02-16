@@ -50,7 +50,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24.4'
+          go-version: '1.26'
 
       # Step 4: Run the main Go application with -skip-check flag.
       - name: Run Go Application (All IPs)
