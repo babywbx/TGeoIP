@@ -26,7 +26,7 @@ jobs:
     steps:
       # Step 1: Check out the repository's code to the runner.
       - name: Checkout main branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       # Step 2: Download the MMDB database required by the application.
       - name: Download IPinfo MMDB Database
@@ -44,7 +44,7 @@ jobs:
 
       # Step 3: Set up the Go environment.
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: '1.26'
 
@@ -57,44 +57,22 @@ jobs:
           go mod tidy
           go run . -skip-check
 
-      # Step 5: Sync new data with the geoip-all branch and force daily commit.
+      # Step 5: Checkout the geoip-all branch into a subdirectory.
+      - name: Checkout geoip-all branch
+        uses: actions/checkout@v6
+        with:
+          ref: geoip-all
+          path: geoip_all_branch
+
+      # Step 6: Sync new data and commit.
       - name: Sync, Commit and Push to geoip-all branch
         run: |
-          # Create a temporary directory for the geoip-all branch
-          mkdir geoip_all_branch
-          cd geoip_all_branch
-          
-          # Initialize git repository
-          git init
-          git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
-          
-          # Configure git identity first
-          git config user.name 'github-actions[bot]'
-          git config user.email 'github-actions[bot]@users.noreply.github.com'
-          
-          # Always create or checkout the geoip-all branch
-          if git fetch origin geoip-all 2>/dev/null; then
-            echo "geoip-all branch exists, checking it out"
-            git checkout geoip-all
-          else
-            echo "geoip-all branch does not exist, creating new branch"
-            git checkout -b geoip-all
-            # Create an initial empty commit for new branch
-            git commit --allow-empty -m "🤖 chore(geoip-all): initialize branch [skip ci]"
-          fi
-          
-          cd ..
-          
-          # Use rsync to sync the newly generated files to the cloned branch directory.
-          # -a: archive mode (preserves permissions, etc.)
-          # -v: verbose output
-          # --delete: deletes files in the destination that no longer exist in the source.
           rsync -av --delete --exclude='.git/' geoip/ geoip_all_branch/
-          
-          # Navigate into the cloned branch directory.
           cd geoip_all_branch
-          
-          # Stage all changes first, then check if there are any.
+
+          git config user.name 'wbxBot'
+          git config user.email '224158880+wbxbot@users.noreply.github.com'
+
           git add .
           if git diff --staged --quiet; then
             echo "No changes detected, creating empty commit to maintain daily update schedule"
@@ -103,6 +81,5 @@ jobs:
             echo "Changes detected, committing updates"
             git commit -m "🤖 chore(geoip-all): daily update all IP geoip data [skip ci]"
           fi
-          
-          # Push changes to the remote repository
+
           git push origin geoip-all
