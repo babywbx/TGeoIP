@@ -8,9 +8,9 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
-	"net"
+	"log/slog"
 	"math/bits"
+	"net"
 	"net/http"
 	"net/netip"
 	"os"
@@ -57,78 +57,78 @@ func main() {
 
 	// Validate -full flag value
 	if *fullMode != 0 && (*fullMode < 1 || *fullMode > 2) {
-		log.Fatalf("Fatal: Invalid -full value: %d. Only values 1 (either passes) or 2 (both must pass) are allowed.", *fullMode)
+		slog.Error("Invalid -full value, only 1 or 2 allowed", "value", *fullMode)
+		os.Exit(1)
 	}
 
 	// Mode-dependent setup
 	var dbPath string
 	if *localMode {
-		log.Println("--- Running in Local Mode ---")
-		dbPath = "ipinfo_lite.mmdb" // Use local DB file.
+		slog.Info("Running in local mode")
+		dbPath = "ipinfo_lite.mmdb"
 	} else {
-		log.Println("--- Running in GitHub Actions Mode ---")
-		dbPath = os.Getenv("DB_PATH") // Use DB path from environment variable.
+		slog.Info("Running in GitHub Actions mode")
+		dbPath = os.Getenv("DB_PATH")
 		if dbPath == "" {
-			log.Fatalf("Fatal: DB_PATH environment variable not set.")
+			slog.Error("DB_PATH environment variable not set")
+			os.Exit(1)
 		}
 	}
 
 	// Load GeoIP database
-	log.Printf("Loading GeoIP database from: %s", dbPath)
+	slog.Info("Loading GeoIP database", "path", dbPath)
 	db, err := maxminddb.Open(dbPath)
 	if err != nil {
-		log.Fatalf("Fatal: Cannot open MMDB file: %v. In local mode, ensure 'ipinfo_lite.mmdb' is present.", err)
+		slog.Error("Cannot open MMDB file", "error", err)
+		os.Exit(1)
 	}
 	defer db.Close()
 
 	// Main Execution Logic
-	// Load CIDR list from source
-	log.Println("Step 1: Loading CIDR list from source...")
+	slog.Info("Step 1: Loading CIDR list from source")
 	cidrs, err := loadCIDRs(CidrListURL)
 	if err != nil {
-		log.Fatalf("Fatal: Failed to load CIDR list: %v", err)
+		slog.Error("Failed to load CIDR list", "error", err)
+		os.Exit(1)
 	}
-	log.Printf("Successfully loaded %d IPv4 CIDR ranges.", len(cidrs))
+	slog.Info("Loaded IPv4 CIDR ranges", "count", len(cidrs))
 
-	// Expand CIDRs to all host IPs
-	log.Println("Step 2: Expanding CIDRs to all host IPs...")
+	slog.Info("Step 2: Expanding CIDRs to all host IPs")
 	allIPs := expandCIDRsToIPs(cidrs)
-	log.Printf("Expanded to %d total IPs to check.", len(allIPs))
+	slog.Info("Expanded IPs to check", "count", len(allIPs))
 
 	// Apply the IP limit if the -limit flag is used.
 	if *limit > 0 && len(allIPs) > *limit {
-		log.Printf(">>> Limiting check to the first %d IPs as per -limit flag. <<<", *limit)
+		slog.Info("Limiting IPs per -limit flag", "limit", *limit)
 		allIPs = allIPs[:*limit]
 	}
 
 	// Conditionally check for reachable IPs or use all of them.
 	var ipsToProcess []string
 	if *skipCheck {
-		log.Println(">>> Skipping connectivity check as per -skip-check flag. <<<")
+		slog.Info("Skipping connectivity check per -skip-check flag")
 		ipsToProcess = allIPs
 	} else {
-		// Find reachable IPs
-		log.Println("Step 3: Finding reachable IPs...")
+		slog.Info("Step 3: Finding reachable IPs")
 		if *fullMode > 0 {
 			ipsToProcess = findReachableIPsFull(allIPs, *fullMode)
 		} else {
 			ipsToProcess = findReachableIPs(allIPs, *useICMP)
 		}
-		log.Printf("Found %d reachable IPs.", len(ipsToProcess))
+		slog.Info("Found reachable IPs", "count", len(ipsToProcess))
 	}
 
 	// Group IPs by country
 	if len(ipsToProcess) > 0 {
-		log.Println("Step 4: Grouping IPs by country...")
+		slog.Info("Step 4: Grouping IPs by country")
 		countryMap := groupByCountryFromDB(ipsToProcess, db)
-		log.Printf("Saving results for %d countries to the '%s/' directory.", len(countryMap), OutputFolder)
+		slog.Info("Saving results", "countries", len(countryMap), "folder", OutputFolder)
 		saveResultsToFiles(countryMap)
 	} else {
-		log.Println("No IPs to process or save.")
+		slog.Info("No IPs to process or save")
 	}
 
-	// Save results to files
-	log.Println("Process completed successfully.")
+	slog.Info("Process completed successfully")
 }
 
 // groupByCountryFromDB looks up IPs in the local MMDB and groups them by country code.
@@ -211,7 +211,7 @@ func findReachableIPs(ips []string, useICMP bool) []string {
 	var wg sync.WaitGroup
 
 	if useICMP {
-		log.Printf("Checking %d IPs using ICMP ping with %d workers (up to 3 retries each)...", len(ips), MaxCheckers)
+		slog.Info("Checking IPs using ICMP ping", "count", len(ips), "workers", MaxCheckers)
 		for _, ip := range ips {
 			wg.Add(1)
 			go func(ip string) {
@@ -234,7 +234,7 @@ func findReachableIPs(ips []string, useICMP bool) []string {
 			}(ip)
 		}
 	} else {
-		log.Printf("Checking %d IPs on TCP port %s with %d workers (up to 3 retries each)...", len(ips), CheckPort, MaxCheckers)
+		slog.Info("Checking IPs on TCP port", "count", len(ips), "port", CheckPort, "workers", MaxCheckers)
 		for _, ip := range ips {
 			wg.Add(1)
 			go func(ip string) {
@@ -275,7 +275,7 @@ func findReachableIPsFull(ips []string, fullMode int) []string {
 	} else {
 		modeDesc = "both ICMP and TCP"
 	}
-	log.Printf("Checking %d IPs using %s with %d workers (up to 3 retries each)...", len(ips), modeDesc, MaxCheckers)
+	slog.Info("Checking IPs", "mode", modeDesc, "count", len(ips), "workers", MaxCheckers)
 
 	for _, ip := range ips {
 		wg.Add(1)
@@ -471,7 +471,7 @@ func writeLines(filePath string, lines []string) {
 	}
 	f, err := os.Create(filePath)
 	if err != nil {
-		log.Printf("Failed to create file %s: %v", filePath, err)
+		slog.Error("Failed to create file", "path", filePath, "error", err)
 		return
 	}
 	defer f.Close()
@@ -483,6 +483,6 @@ func writeLines(filePath string, lines []string) {
 		}
 	}
 	if err := w.Flush(); err != nil {
-		log.Printf("Failed to write file %s: %v", filePath, err)
+		slog.Error("Failed to write file", "path", filePath, "error", err)
 	}
 }
