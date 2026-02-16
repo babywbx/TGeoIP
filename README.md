@@ -44,12 +44,13 @@ This project aims to provide an up-to-date, reliable source of categorized Teleg
 ## ✨ Features
 
 - **🤖 Fully Automated**: Updates hourly via GitHub Actions.
-- **⚡️ Fast & Concurrent**: Uses high-concurrency checks to process thousands of IPs quickly.
-- **🛡️ Reliable**: Defaults to a TCP port 443 check, which is more reliable than ICMP ping in cloud environments.
+- **⚡️ Fast & Concurrent**: High-concurrency checks with memory-efficient `net/netip` based IP processing, pre-parsed sorting, and streaming file I/O.
+- **🪶 Lightweight**: Only one external dependency (`maxminddb-golang`). Core IP logic is pure Go stdlib.
+- **🛡️ Reliable**: Defaults to a TCP port 443 check with HTTP timeouts, more reliable than ICMP ping in cloud environments.
 - **🌍 Geolocation Lookup**: Uses a local MMDB database for fast and offline geo-lookups.
 - **📝 Dual-Format Output**: Generates both plain IP lists (`US.txt`) and aggregated CIDR lists (`US-CIDR.txt`).
 - **🔄 Retry Mechanism**: Implements 3-retry logic with 200ms intervals for better reliability.
-- **⏱️ Optimized Timeouts**: Uses 3-second timeouts for better network compatibility.
+- **⏱️ Optimized Timeouts**: Uses 3-second timeouts for checks, 30-second timeout for HTTP requests.
 - **🔍 Dual Check Modes**: Support for ICMP-only, TCP-only, or combined ICMP/TCP checks.
 - **⚡ Skip Check Option**: Bypass connectivity checks for faster processing when needed.
 
@@ -65,7 +66,7 @@ This project aims to provide an up-to-date, reliable source of categorized Teleg
 2.  It downloads the latest Telegram CIDR list and the free IPinfo geo database.
 3.  The Go application processes all IPs, checking for live hosts.
 4.  Results are grouped by country and saved as `.txt` files.
-5.  The `github-actions[bot]` automatically commits the updated files to the `geoip` branch.
+5.  `wbxBot` automatically commits the updated files to the `geoip` branch.
 
 <div align="right">
 
@@ -91,7 +92,7 @@ You can use these files directly in your firewall, routing rules, or other appli
 
 ### Prerequisites
 To run this application locally, you need:
-- Go (version 1.24+ recommended)
+- Go (version 1.26+ recommended)
 - An `ipinfo_lite.mmdb` file from [IPinfo][ipinfo-lite-link] in the project root.
 
 ### Running the Application
@@ -168,7 +169,7 @@ This project is licensed under the GNU General Public License v3.0. See the `LIC
 
 </div>
 
-Copyright © 2025 Babywbx.
+Copyright © 2025-2026 Babywbx.
 
 <!-- LINK GROUP -->
 
